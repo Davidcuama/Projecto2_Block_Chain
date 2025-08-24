@@ -374,6 +374,27 @@ $sigOuter = Get-PGPSignature "keys\node_b_priv.asc" ("node_b|{0}|{1}" -f $turn,$
 
 $body = @{ leaderId="node_b"; encryptedSeed=$sigSeed; turn=$turn; signature=$sigOuter; seedHex=$seedHex } | ConvertTo-Json
 Invoke-RestMethod -Uri "$API/leader/random-seed" -Method Post -ContentType "application/json" -Body $body
+
+
+Tips de troubleshooting rápidos
+
+“Input should be a valid string” (publicKeyArmored / signature)
+Asegúrate de que no estás enviando arrays u objetos:
+
+Lee archivos con Get-FileText (no Get-Content sin -Raw).
+
+Usa Get-PGPSignature (hace -join de líneas).
+
+Revisa tipos:
+
+$pubA.GetType().FullName    # System.String
+$sigRegA.GetType().FullName # System.String
+
+
+“unknown turn (seed not set)” → publica el seed del turno antes de votar.
+
+No abre /docs → usa http://127.0.0.1:8001/docs (o cambia puertos en docker-compose.yml y recrea con --force-recreate).
+
 ## 8) Endpoints principales
 
 - `POST /network/register` — Firma: `"nodeId|ip|publicKeyArmored"`  
