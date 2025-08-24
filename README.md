@@ -181,8 +181,9 @@ function IpToInt([string]$ip) {
     $p = $ip.Split('.').ForEach([int])
     ($p[0] -shl 24) -bor ($p[1] -shl 16) -bor ($p[2] -shl 8) -bor $p[3]
 }
-1) Registrar nodos
-
+```
+-1 Registrar nodos
+```
 Texto a firmar: nodeId|ip|publicKeyArmored (la pública completa, ASCII-armored).
 
 node_a
@@ -219,9 +220,9 @@ $sigRegC  = Get-PGPSignature "keys\node_c_priv.asc" $payloadC
 
 $body = @{ nodeId="node_c"; ip="172.28.0.13"; publicKeyArmored=$pubC; signature=$sigRegC } | ConvertTo-Json -Depth 6
 Invoke-RestMethod -Uri "$API/network/register" -Method Post -ContentType "application/json" -Body $body
-
-2) Congelar tokens
-
+```
+-2 Congelar tokens
+```
 Texto a firmar: nodeId|tokens
 
 # node_a
@@ -235,9 +236,9 @@ Invoke-RestMethod -Uri "$API/tokens/freeze" -Method Post -ContentType "applicati
 # node_c
 $sigFrC = Get-PGPSignature "keys\node_c_priv.asc" "node_c|100"
 Invoke-RestMethod -Uri "$API/tokens/freeze" -Method Post -ContentType "application/json" -Body (@{nodeId="node_c";tokens=100;signature=$sigFrC} | ConvertTo-Json)
-
-3) Publicar seed (líder del turno)
-
+```
+-3 Publicar seed (líder del turno)
+```
 Con IPs 172.28.0.11/12/13, la rotación por IP descendente es: node_c > node_b > node_a.
 Ejemplo turno 0 → líder = node_c.
 
@@ -273,9 +274,9 @@ $nodes = @(
 $sorted = $nodes | Sort-Object @{Expression={ IpToInt $_.ip }} -Descending
 $leader = $sorted[ $turn % $sorted.Count ].id
 $leader
-
-4) Votar (los 3 nodos)
-
+```
+-4 Votar (los 3 nodos)
+```
 Firmas:
 
 encryptedVote = "vote|nodeId|leaderId|turn"
@@ -299,13 +300,14 @@ $sigVote = Get-PGPSignature "keys\node_c_priv.asc" "vote|node_c|node_c|0"
 $sigEnv  = Get-PGPSignature "keys\node_c_priv.asc" "envelope|node_c|0"
 Invoke-RestMethod -Uri "$API/consensus/vote" -Method Post -ContentType "application/json" `
   -Body (@{ nodeId="node_c"; leaderId="node_c"; turn=0; encryptedVote=$sigVote; signature=$sigEnv } | ConvertTo-Json)
-
-5) Ver resultado
+```
+-5 Ver resultado
+```
 Invoke-RestMethod -Uri "$API/consensus/result" -Method Get
 # Esperado: leader="node_c", agreement≈0.6667, thresholdReached=true
-
-6) Proponer bloque (proposer firma)
-
+```
+-6 Proponer bloque (proposer firma)
+```
 Texto a firmar: index|previousHash|timestamp
 (Ejemplo: proposer = node_a)
 
@@ -323,9 +325,9 @@ $body = @{
 } | ConvertTo-Json -Depth 6
 
 Invoke-RestMethod -Uri "$API/block/propose" -Method Post -ContentType "application/json" -Body $body
-
-7) Enviar bloque (líder firma hash)
-
+```
+-7 Enviar bloque (líder firma hash)
+```
 Texto a firmar: hash (solo el hash del bloque).
 (Ejemplo: líder del turno 0 = node_c)
 
@@ -344,9 +346,9 @@ $body = @{
 } | ConvertTo-Json -Depth 6
 
 Invoke-RestMethod -Uri "$API/block/submit" -Method Post -ContentType "application/json" -Body $body
-
-8) Reporte de líder (opcional)
-
+```
+-8 Reporte de líder (opcional)
+```
 Texto a firmar: reporterId|leaderId|reason|blockHash
 (Ejemplo: node_a reporta a node_c)
 
@@ -362,8 +364,9 @@ $body = @{
 Invoke-RestMethod -Uri "$API/leader/report" -Method Post -ContentType "application/json" -Body $body
 # Cuando reporten ≥ 2/3, el estado será "expelled"
 ---
-9) Siguiente turno (ejemplo: turno 1)
-
+```
+-9 Siguiente turno (ejemplo: turno 1)
+```
 Con estas IPs, el líder será node_b.
 Repite seed y votos cambiando turn=1 y leaderId="node_b".
 
@@ -375,9 +378,30 @@ $sigOuter = Get-PGPSignature "keys\node_b_priv.asc" ("node_b|{0}|{1}" -f $turn,$
 $body = @{ leaderId="node_b"; encryptedSeed=$sigSeed; turn=$turn; signature=$sigOuter; seedHex=$seedHex } | ConvertTo-Json
 Invoke-RestMethod -Uri "$API/leader/random-seed" -Method Post -ContentType "application/json" -Body $body
 
+---
+```
+-10 Detección y reporte de líder fraudulento (slashing)
+```
+Si el líder del turno firma/propaga un bloque inválido (o incurre en conducta indebida), los demás nodos pueden **reportarlo**.  
+Cuando **≥ 2/3** de los nodos reportan al mismo líder y por el mismo evento (mismo `blockHash`), el sistema lo marca como **expelled**.
 
+**Endpoint:** `POST /leader/report`  
+**Texto a firmar (PGP detached):** `reporterId|leaderId|reason|blockHash`  
+**Request JSON:**
+```json
+{
+  "reporterId": "<node_X>",
+  "leaderId": "<node_leader>",
+  "evidence": {
+    "reason": "<texto_corto>",
+    "blockHash": "<hash_del_bloque_reportado>"
+  },
+  "signature": "<firma_detached_ASCII_armored>"
+}
+
+```
 Tips de troubleshooting rápidos
-
+```
 “Input should be a valid string” (publicKeyArmored / signature)
 Asegúrate de que no estás enviando arrays u objetos:
 
