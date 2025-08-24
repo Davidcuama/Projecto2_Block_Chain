@@ -347,7 +347,7 @@ $body = @{
 
 Invoke-RestMethod -Uri "$API/block/submit" -Method Post -ContentType "application/json" -Body $body
 ```
--8 Reporte de líder (opcional)
+-8 líder fraudoliento (opcional)
 ```
 Texto a firmar: reporterId|leaderId|reason|blockHash
 (Ejemplo: node_a reporta a node_c)
@@ -380,26 +380,7 @@ Invoke-RestMethod -Uri "$API/leader/random-seed" -Method Post -ContentType "appl
 
 ---
 ```
--10 Detección y reporte de líder fraudulento (slashing)
-```
-Si el líder del turno firma/propaga un bloque inválido (o incurre en conducta indebida), los demás nodos pueden **reportarlo**.  
-Cuando **≥ 2/3** de los nodos reportan al mismo líder y por el mismo evento (mismo `blockHash`), el sistema lo marca como **expelled**.
 
-**Endpoint:** `POST /leader/report`  
-**Texto a firmar (PGP detached):** `reporterId|leaderId|reason|blockHash`  
-**Request JSON:**
-```json
-{
-  "reporterId": "<node_X>",
-  "leaderId": "<node_leader>",
-  "evidence": {
-    "reason": "<texto_corto>",
-    "blockHash": "<hash_del_bloque_reportado>"
-  },
-  "signature": "<firma_detached_ASCII_armored>"
-}
-
-```
 Tips de troubleshooting rápidos
 ```
 “Input should be a valid string” (publicKeyArmored / signature)
