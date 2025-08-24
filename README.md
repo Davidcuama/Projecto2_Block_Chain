@@ -394,7 +394,7 @@ $sigRegA.GetType().FullName # System.String
 “unknown turn (seed not set)” → publica el seed del turno antes de votar.
 
 No abre /docs → usa http://127.0.0.1:8001/docs (o cambia puertos en docker-compose.yml y recrea con --force-recreate).
-
+```
 ## 8) Endpoints principales
 
 - `POST /network/register` — Firma: `"nodeId|ip|publicKeyArmored"`  
