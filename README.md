@@ -147,13 +147,233 @@ python scripts\client_pgp_demo.py --api http://127.0.0.1:8001 --node-id node_c -
 curl http://127.0.0.1:8001/consensus/result
 ```
 
-### Opción B: llamadas manuales con PowerShell
+## Opción B: llamadas manuales con PowerShell
 
-Para firmas manuales, usa el helper `scripts/sign_text.py` (ver más abajo) y los bloques PowerShell del README original.  
-Si prefieres automatizar **todo**, utiliza el script **`scripts/demo_flow.ps1`** incluido en este paquete (ver siguiente sección).
+Esta opción te permite “ir a mano” endpoint por endpoint usando **PowerShell** en Windows.  
+Las **firmas PGP** se generan localmente con `scripts/sign_text.py` (PGPy) y luego se envían con `Invoke-RestMethod`.
 
+> **Prerequisitos**
+> - La API debe estar corriendo (p. ej. `node_a` en `http://127.0.0.1:8001`).
+> - Tener las 6 llaves en `./keys/`: `node_a_priv.asc / node_a_pub.asc / node_b_priv.asc / node_b_pub.asc / node_c_priv.asc / node_c_pub.asc`.
+> - `scripts/sign_text.py` presente (ver anexo del README).
+> - `pip install -r requirements.txt` en tu host para tener `pgpy` y `requests`.
+
+### 0) Helpers (pégalos 1 sola vez por sesión)
+
+```powershell
+# API objetivo (coordinador)
+$API = "http://127.0.0.1:8001"
+
+# Lee archivos como UN string completo (evita arrays/objetos)
+function Get-FileText {
+    param([string]$Path)
+    [System.IO.File]::ReadAllText((Resolve-Path $Path), [System.Text.Encoding]::UTF8)
+}
+
+# Firma PGP (une líneas devueltas por Python en un único string)
+function Get-PGPSignature {
+    param([string]$PrivPath, [string]$TextToSign)
+    [string]::Join("`n", (python scripts\sign_text.py $PrivPath $TextToSign))
+}
+
+# Utilidad para calcular el líder por rotación (IP descendente)
+function IpToInt([string]$ip) {
+    $p = $ip.Split('.').ForEach([int])
+    ($p[0] -shl 24) -bor ($p[1] -shl 16) -bor ($p[2] -shl 8) -bor $p[3]
+}
+1) Registrar nodos
+
+Texto a firmar: nodeId|ip|publicKeyArmored (la pública completa, ASCII-armored).
+
+node_a
+
+$pubA     = Get-FileText ".\keys\node_a_pub.asc"
+$payloadA = ("node_a|172.28.0.11|{0}" -f $pubA)
+$sigRegA  = Get-PGPSignature "keys\node_a_priv.asc" $payloadA
+
+$body = @{
+  nodeId           = "node_a"
+  ip               = "172.28.0.11"
+  publicKeyArmored = $pubA
+  signature        = $sigRegA
+} | ConvertTo-Json -Depth 6
+
+Invoke-RestMethod -Uri "$API/network/register" -Method Post -ContentType "application/json" -Body $body
+
+
+node_b
+
+$pubB     = Get-FileText ".\keys\node_b_pub.asc"
+$payloadB = ("node_b|172.28.0.12|{0}" -f $pubB)
+$sigRegB  = Get-PGPSignature "keys\node_b_priv.asc" $payloadB
+
+$body = @{ nodeId="node_b"; ip="172.28.0.12"; publicKeyArmored=$pubB; signature=$sigRegB } | ConvertTo-Json -Depth 6
+Invoke-RestMethod -Uri "$API/network/register" -Method Post -ContentType "application/json" -Body $body
+
+
+node_c
+
+$pubC     = Get-FileText ".\keys\node_c_pub.asc"
+$payloadC = ("node_c|172.28.0.13|{0}" -f $pubC)
+$sigRegC  = Get-PGPSignature "keys\node_c_priv.asc" $payloadC
+
+$body = @{ nodeId="node_c"; ip="172.28.0.13"; publicKeyArmored=$pubC; signature=$sigRegC } | ConvertTo-Json -Depth 6
+Invoke-RestMethod -Uri "$API/network/register" -Method Post -ContentType "application/json" -Body $body
+
+2) Congelar tokens
+
+Texto a firmar: nodeId|tokens
+
+# node_a
+$sigFrA = Get-PGPSignature "keys\node_a_priv.asc" "node_a|100"
+Invoke-RestMethod -Uri "$API/tokens/freeze" -Method Post -ContentType "application/json" -Body (@{nodeId="node_a";tokens=100;signature=$sigFrA} | ConvertTo-Json)
+
+# node_b
+$sigFrB = Get-PGPSignature "keys\node_b_priv.asc" "node_b|100"
+Invoke-RestMethod -Uri "$API/tokens/freeze" -Method Post -ContentType "application/json" -Body (@{nodeId="node_b";tokens=100;signature=$sigFrB} | ConvertTo-Json)
+
+# node_c
+$sigFrC = Get-PGPSignature "keys\node_c_priv.asc" "node_c|100"
+Invoke-RestMethod -Uri "$API/tokens/freeze" -Method Post -ContentType "application/json" -Body (@{nodeId="node_c";tokens=100;signature=$sigFrC} | ConvertTo-Json)
+
+3) Publicar seed (líder del turno)
+
+Con IPs 172.28.0.11/12/13, la rotación por IP descendente es: node_c > node_b > node_a.
+Ejemplo turno 0 → líder = node_c.
+
+Firmas:
+
+encryptedSeed = firma sobre seedHex
+
+signature (outer) = firma sobre "leaderId|turn|seedHex"
+
+$turn = 0
+$seedHex  = "00010001"   # 8 hex (32 bits)
+$sigSeed  = Get-PGPSignature "keys\node_c_priv.asc" $seedHex
+$sigOuter = Get-PGPSignature "keys\node_c_priv.asc" ("node_c|{0}|{1}" -f $turn,$seedHex)
+
+$body = @{
+  leaderId      = "node_c"
+  encryptedSeed = $sigSeed
+  turn          = $turn
+  signature     = $sigOuter
+  seedHex       = $seedHex
+} | ConvertTo-Json
+
+Invoke-RestMethod -Uri "$API/leader/random-seed" -Method Post -ContentType "application/json" -Body $body
+
+
+Calcular líder por rotación (opcional):
+
+$nodes = @(
+  @{ id="node_a"; ip="172.28.0.11" },
+  @{ id="node_b"; ip="172.28.0.12" },
+  @{ id="node_c"; ip="172.28.0.13" }
+)
+$sorted = $nodes | Sort-Object @{Expression={ IpToInt $_.ip }} -Descending
+$leader = $sorted[ $turn % $sorted.Count ].id
+$leader
+
+4) Votar (los 3 nodos)
+
+Firmas:
+
+encryptedVote = "vote|nodeId|leaderId|turn"
+
+signature (sobre) = "envelope|nodeId|turn"
+
+# node_a → node_c (turno 0)
+$sigVote = Get-PGPSignature "keys\node_a_priv.asc" "vote|node_a|node_c|0"
+$sigEnv  = Get-PGPSignature "keys\node_a_priv.asc" "envelope|node_a|0"
+Invoke-RestMethod -Uri "$API/consensus/vote" -Method Post -ContentType "application/json" `
+  -Body (@{ nodeId="node_a"; leaderId="node_c"; turn=0; encryptedVote=$sigVote; signature=$sigEnv } | ConvertTo-Json)
+
+# node_b → node_c
+$sigVote = Get-PGPSignature "keys\node_b_priv.asc" "vote|node_b|node_c|0"
+$sigEnv  = Get-PGPSignature "keys\node_b_priv.asc" "envelope|node_b|0"
+Invoke-RestMethod -Uri "$API/consensus/vote" -Method Post -ContentType "application/json" `
+  -Body (@{ nodeId="node_b"; leaderId="node_c"; turn=0; encryptedVote=$sigVote; signature=$sigEnv } | ConvertTo-Json)
+
+# node_c → node_c
+$sigVote = Get-PGPSignature "keys\node_c_priv.asc" "vote|node_c|node_c|0"
+$sigEnv  = Get-PGPSignature "keys\node_c_priv.asc" "envelope|node_c|0"
+Invoke-RestMethod -Uri "$API/consensus/vote" -Method Post -ContentType "application/json" `
+  -Body (@{ nodeId="node_c"; leaderId="node_c"; turn=0; encryptedVote=$sigVote; signature=$sigEnv } | ConvertTo-Json)
+
+5) Ver resultado
+Invoke-RestMethod -Uri "$API/consensus/result" -Method Get
+# Esperado: leader="node_c", agreement≈0.6667, thresholdReached=true
+
+6) Proponer bloque (proposer firma)
+
+Texto a firmar: index|previousHash|timestamp
+(Ejemplo: proposer = node_a)
+
+$SIG_PROP = Get-PGPSignature "keys\node_a_priv.asc" "1|abc|2025-08-24T12:00:00Z"
+
+$body = @{
+  proposerId = "node_a"
+  block      = @{
+    index        = 1
+    timestamp    = "2025-08-24T12:00:00Z"
+    transactions = @()
+    previousHash = "abc"
+  }
+  signature = $SIG_PROP
+} | ConvertTo-Json -Depth 6
+
+Invoke-RestMethod -Uri "$API/block/propose" -Method Post -ContentType "application/json" -Body $body
+
+7) Enviar bloque (líder firma hash)
+
+Texto a firmar: hash (solo el hash del bloque).
+(Ejemplo: líder del turno 0 = node_c)
+
+$SIG_LEAD = Get-PGPSignature "keys\node_c_priv.asc" "abcd1234"
+
+$body = @{
+  leaderId = "node_c"
+  block    = @{
+    index        = 1
+    timestamp    = "2025-08-24T12:00:00Z"
+    transactions = @()
+    previousHash = "abc"
+    hash         = "abcd1234"
+  }
+  signature = $SIG_LEAD
+} | ConvertTo-Json -Depth 6
+
+Invoke-RestMethod -Uri "$API/block/submit" -Method Post -ContentType "application/json" -Body $body
+
+8) Reporte de líder (opcional)
+
+Texto a firmar: reporterId|leaderId|reason|blockHash
+(Ejemplo: node_a reporta a node_c)
+
+$SIG_REP = Get-PGPSignature "keys\node_a_priv.asc" "node_a|node_c|invalid signature|abcd1234"
+
+$body = @{
+  reporterId = "node_a"
+  leaderId   = "node_c"
+  evidence   = @{ reason="invalid signature"; blockHash="abcd1234" }
+  signature  = $SIG_REP
+} | ConvertTo-Json -Depth 6
+
+Invoke-RestMethod -Uri "$API/leader/report" -Method Post -ContentType "application/json" -Body $body
+# Cuando reporten ≥ 2/3, el estado será "expelled"
 ---
+9) Siguiente turno (ejemplo: turno 1)
 
+Con estas IPs, el líder será node_b.
+Repite seed y votos cambiando turn=1 y leaderId="node_b".
+
+$turn = 1
+$seedHex  = "00010002"
+$sigSeed  = Get-PGPSignature "keys\node_b_priv.asc" $seedHex
+$sigOuter = Get-PGPSignature "keys\node_b_priv.asc" ("node_b|{0}|{1}" -f $turn,$seedHex)
+
+$body = @{ leaderId="node_b"; encryptedSeed=$sigSeed; turn=$turn; signature=$sigOuter; seedHex=$seedHex } | ConvertTo-Json
+Invoke-RestMethod -Uri "$API/leader/random-seed" -Method Post -ContentType "application/json" -Body $body
 ## 8) Endpoints principales
 
 - `POST /network/register` — Firma: `"nodeId|ip|publicKeyArmored"`  
