@@ -1,6 +1,6 @@
 # Proyecto Blockchain + PGPy — Guía de ejecución
 
-## 🧭 Índice
+##  Índice
 
 1. **Resumen del sistema**
 2. **Requisitos**
